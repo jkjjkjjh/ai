@@ -32,7 +32,7 @@ async (conn, mek, m, { from, quoted, reply }) => {
             buffer = Buffer.concat([buffer, chunk]);
         }
 
-        // Upload to tmpfiles
+        // Upload image to tmpfiles
         const form = new FormData();
         form.append('file', buffer, {
             filename: 'anime.jpg',
@@ -50,33 +50,20 @@ async (conn, mek, m, { from, quoted, reply }) => {
             'tmpfiles.org/dl/'
         );
 
-        // Call Anime API
-        const apiRes = await axios.get(
+        // Call YOUR API (Direct Image Response)
+        const apiResponse = await axios.get(
             `https://api-faa.my.id/faa/toanime?url=${encodeURIComponent(imageUrl)}`,
-            { timeout: 60000 }
+            { 
+                responseType: 'arraybuffer',  // VERY IMPORTANT
+                timeout: 60000
+            }
         );
 
-        // If API returns direct image URL
-        let finalImageUrl;
-
-        if (typeof apiRes.data === "string") {
-            finalImageUrl = apiRes.data;
-        } else if (apiRes.data?.result) {
-            finalImageUrl = apiRes.data.result;
-        } else {
-            return reply("❌ API did not return a valid image.");
-        }
-
-        // Download generated image as buffer
-        const finalImage = await axios.get(finalImageUrl, {
-            responseType: 'arraybuffer'
-        });
-
-        // Send image directly to WhatsApp
+        // Send the generated image buffer directly
         await conn.sendMessage(
             from,
             {
-                image: Buffer.from(finalImage.data),
+                image: Buffer.from(apiResponse.data),
                 caption: "> 🎨 Anime Image Generated Successfully by 𝐑𝐔𝐇𝐈𝐈𝐈 😻🎀💗"
             },
             { quoted: m }
