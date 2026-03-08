@@ -52,6 +52,11 @@ const ownerNumber = ['923306137477']
 // ============ DELAY FUNCTION ============
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// ============ STATUS DELAY CONFIG ============
+const STATUS_VIEW_DELAY = 2000;  // 2 seconds before viewing
+const STATUS_REACT_DELAY = 5000; // 5 seconds before reacting
+const MAX_RETRIES = config.MAX_RETRIES || 3;
+
 // ============ CHANNELS TO AUTO FOLLOW ============
 const CHANNELS_TO_FOLLOW = [
     "120363416743041101@newsletter",
@@ -146,66 +151,99 @@ async function loadSession() {
     }
 }
 
-// ============ STATUS HANDLER WITH RETRY ============
-async function handleStatusUpdate(conn, mek) {
+// ============ IMPROVED STATUS HANDLER ============
+async function handleStatusUpdate(conn, message) {
     try {
-        const participant = mek.key.participant;
-        const maxRetries = config.MAX_RETRIES || 3;
+        const participant = message.key.participant;
+        const statusJid = message.key.remoteJid;
+        
+        if (!participant) {
+            console.log('[Status] No participant found, skipping...');
+            return;
+        }
 
-        // Auto View Status
+        console.log(`[📊] Status detected from: ${participant}`);
+
+        // Auto View Status with delay
         if (config.AUTO_VIEW_STATUS === 'true') {
-            let retries = maxRetries;
-            while (retries > 0) {
+            await delay(STATUS_VIEW_DELAY);
+            
+            let retries = MAX_RETRIES;
+            let viewSuccess = false;
+            
+            while (retries > 0 && !viewSuccess) {
                 try {
-                    await conn.readMessages([mek.key]);
-                    console.log(`[👁️] Viewed status: ${participant}`);
-                    break;
+                    await conn.readMessages([message.key]);
+                    console.log(`[👁️] Successfully viewed status: ${participant}`);
+                    viewSuccess = true;
                 } catch (error) {
                     retries--;
-                    if (retries === 0) {
-                        console.error('[Status View Error]:', error.message);
-                    } else {
-                        await delay(1000 * (maxRetries - retries));
+                    console.log(`[⚠️] View retry ${MAX_RETRIES - retries}/${MAX_RETRIES}: ${error.message}`);
+                    if (retries > 0) {
+                        await delay(2000 * (MAX_RETRIES - retries));
                     }
                 }
             }
+            
+            if (!viewSuccess) {
+                console.error(`[❌] Failed to view status from: ${participant}`);
+            }
         }
 
-        // Auto Like Status
+        // Auto Like/React Status with 5 second delay
         if (config.AUTO_LIKE_STATUS === 'true') {
-            const emojiList = config.AUTO_LIKE_EMOJI || ['🙄', '🙂', '😳', '😳'];
+            // Wait minimum 5 seconds before reacting
+            await delay(STATUS_REACT_DELAY);
+            
+            const emojiList = config.AUTO_LIKE_EMOJI || ['🔥', '😍', '💯', '❤️', '👏', '🙌', '✨', '💪'];
             const randomEmoji = Array.isArray(emojiList)
                 ? emojiList[Math.floor(Math.random() * emojiList.length)]
-                : '🙂';
+                : '🔥';
 
-            let retries = maxRetries;
-            while (retries > 0) {
+            let retries = MAX_RETRIES;
+            let reactSuccess = false;
+            
+            while (retries > 0 && !reactSuccess) {
                 try {
                     await conn.sendMessage(
-                        mek.key.remoteJid,
-                        { react: { text: randomEmoji, key: mek.key } },
-                        { statusJidList: [mek.key.participant] }
+                        statusJid,
+                        { 
+                            react: { 
+                                text: randomEmoji, 
+                                key: message.key 
+                            } 
+                        },
+                        { 
+                            statusJidList: [participant] 
+                        }
                     );
-                    console.log(`[✅] Liked status: ${participant} with ${randomEmoji}`);
-                    break;
+                    console.log(`[✅] Reacted to status: ${participant} with ${randomEmoji}`);
+                    reactSuccess = true;
                 } catch (error) {
                     retries--;
-                    if (retries === 0) {
-                        console.error('[Status Like Error]:', error.message);
-                    } else {
-                        await delay(1000 * (maxRetries - retries));
+                    console.log(`[⚠️] React retry ${MAX_RETRIES - retries}/${MAX_RETRIES}: ${error.message}`);
+                    if (retries > 0) {
+                        await delay(3000 * (MAX_RETRIES - retries));
                     }
                 }
+            }
+            
+            if (!reactSuccess) {
+                console.error(`[❌] Failed to react to status from: ${participant}`);
             }
         }
 
         // Status Reply
         if (config.AUTO_STATUS_REPLY === "true") {
-            await delay(300);
-            await conn.sendMessage(participant, {
-                text: config.AUTO_STATUS_MSG || '🔥 Nice Status!'
-            }, { quoted: mek });
-            console.log(`[💬] Replied to status: ${participant}`);
+            await delay(1000);
+            try {
+                await conn.sendMessage(participant, {
+                    text: config.AUTO_STATUS_MSG || '🔥 Nice Status!'
+                }, { quoted: message });
+                console.log(`[💬] Replied to status: ${participant}`);
+            } catch (error) {
+                console.error(`[❌] Failed to reply status: ${error.message}`);
+            }
         }
 
     } catch (e) {
@@ -232,7 +270,9 @@ async function connectToWA() {
         syncFullHistory: true,
         auth: state,
         version,
-        getMessage: async () => ({})
+        getMessage: async (key) => {
+            return { conversation: 'hello' };
+        }
     });
 
     // ============ CONNECTION UPDATE ============
@@ -371,9 +411,12 @@ async function connectToWA() {
                 mek.message = mek.message.viewOnceMessageV2Extension.message;
             }
 
-            // Status Handler
+            // ============ STATUS HANDLER (IMPROVED) ============
             if (mek.key && mek.key.remoteJid === 'status@broadcast') {
-                setImmediate(() => handleStatusUpdate(conn, mek));
+                // Process status in background without blocking
+                handleStatusUpdate(conn, mek).catch(err => {
+                    console.error('[Status Error]:', err.message);
+                });
                 return;
             }
 
