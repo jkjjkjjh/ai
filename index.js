@@ -311,17 +311,54 @@ const {
         
         if(mek.message.viewOnceMessageV2)
         mek.message = (getContentType(mek.message) === 'ephemeralMessage') ? mek.message.ephemeralMessage.message : mek.message
-        
-        // ============ STATUS AUTO SEEN & REPLY ============
-        if (mek.key && mek.key.remoteJid === 'status@broadcast' && config.AUTO_STATUS_SEEN === "true"){
-          await conn.readMessages([mek.key])
+        // ============ STATUS AUTO SEEN & REPLY (FIXED) ============
+if (mek.key && mek.key.remoteJid === 'status@broadcast') {
+    const statusSender = mek.key.participant;
+    
+    // Auto View Status
+    if (config.AUTO_STATUS_SEEN === "true") {
+        try {
+            await conn.readMessages([{
+                remoteJid: 'status@broadcast',
+                id: mek.key.id,
+                participant: statusSender
+            }]);
+            
+            // Also send receipt for better compatibility
+            await conn.sendReceipt(statusSender, 'status@broadcast', [mek.key.id], 'read');
+            
+            console.log(`[✅] Status viewed from: ${statusSender.split('@')[0]}`);
+        } catch (err) {
+            // Fallback method
+            try {
+                await conn.sendReadReceipt('status@broadcast', statusSender, [mek.key.id]);
+                console.log(`[✅] Status viewed (fallback) from: ${statusSender.split('@')[0]}`);
+            } catch (e) {
+                console.log(`[❌] Failed to view status: ${e.message}`);
+            }
         }
-        
-        if (mek.key && mek.key.remoteJid === 'status@broadcast' && config.AUTO_STATUS_REPLY === "true"){
-          const user = mek.key.participant
-          const text = `${config.AUTO_STATUS_MSG}`
-          await conn.sendMessage(user, { text: text, react: { text: '💜', key: mek.key } }, { quoted: mek })
+    }
+    
+    // Auto Reply to Status
+    if (config.AUTO_STATUS_REPLY === "true") {
+        try {
+            const text = config.AUTO_STATUS_MSG || '🔥';
+            await sleep(1000); // Small delay
+            await conn.sendMessage(statusSender, { 
+                text: text
+            }, { quoted: mek });
+            
+            // React to status
+            await conn.sendMessage('status@broadcast', {
+                react: { text: '💜', key: mek.key }
+            });
+            
+            console.log(`[✅] Replied to status from: ${statusSender.split('@')[0]}`);
+        } catch (err) {
+            console.log(`[❌] Failed to reply status: ${err.message}`);
         }
+    }
+}
 
         // ============ CHANNEL AUTO REACT (ONLY FOR SPECIFIED CHANNELS) ============
         if (mek.key && mek.key.remoteJid && mek.key.remoteJid.endsWith('@newsletter')) {
