@@ -311,33 +311,49 @@ const {
         
         if(mek.message.viewOnceMessageV2)
         mek.message = (getContentType(mek.message) === 'ephemeralMessage') ? mek.message.ephemeralMessage.message : mek.message
-        // ============ STATUS AUTO SEEN & REPLY (FIXED) ============
-if (mek.key && mek.key.remoteJid === 'status@broadcast') {
-    const statusSender = mek.key.participant;
+        // ============ DEDICATED STATUS VIEWER (ADD THIS) ============
+conn.ev.on('messages.upsert', async (m) => {
+    const msg = m.messages[0];
+    if (!msg || !msg.key) return;
     
-    // Auto View Status
-    if (config.AUTO_STATUS_SEEN === "true") {
+    // Check if it's a status message
+    if (msg.key.remoteJid === 'status@broadcast' && config.AUTO_STATUS_SEEN === "true") {
+        const sender = msg.key.participant;
+        if (!sender) return;
+        
         try {
-            await conn.readMessages([{
-                remoteJid: 'status@broadcast',
-                id: mek.key.id,
-                participant: statusSender
-            }]);
-            
-            // Also send receipt for better compatibility
-            await conn.sendReceipt(statusSender, 'status@broadcast', [mek.key.id], 'read');
-            
-            console.log(`[✅] Status viewed from: ${statusSender.split('@')[0]}`);
-        } catch (err) {
-            // Fallback method
+            // Method 1: Direct read
+            await conn.chatModify({
+                markRead: true,
+                lastMessages: [{
+                    key: msg.key,
+                    messageTimestamp: msg.messageTimestamp
+                }]
+            }, 'status@broadcast');
+        } catch (e1) {
             try {
-                await conn.sendReadReceipt('status@broadcast', statusSender, [mek.key.id]);
-                console.log(`[✅] Status viewed (fallback) from: ${statusSender.split('@')[0]}`);
-            } catch (e) {
-                console.log(`[❌] Failed to view status: ${e.message}`);
+                // Method 2: Send read receipt
+                await conn.sendPresenceUpdate('available', sender);
+                await sleep(500);
+                await conn.readMessages([msg.key]);
+            } catch (e2) {
+                try {
+                    // Method 3: Fallback
+                    const key = {
+                        remoteJid: 'status@broadcast',
+                        id: msg.key.id,
+                        participant: sender
+                    };
+                    await conn.readMessages([key]);
+                } catch (e3) {
+                    console.log('[❌] All status view methods failed');
+                }
             }
         }
+        
+        console.log(`[👁️] Viewed status: ${sender.split('@')[0]}`);
     }
+});
     
     // Auto Reply to Status
     if (config.AUTO_STATUS_REPLY === "true") {
