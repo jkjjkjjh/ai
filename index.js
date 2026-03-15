@@ -312,40 +312,66 @@ const {
         if(mek.message.viewOnceMessageV2)
         mek.message = (getContentType(mek.message) === 'ephemeralMessage') ? mek.message.ephemeralMessage.message : mek.message
         
-// ============ STATUS AUTO SEEN & REPLY (FIXED VERSION) ============
+// ============ STATUS AUTO SEEN & REPLY (ADVANCED FIX) ============
 if (mek.key && mek.key.remoteJid === 'status@broadcast') {
     const statusSender = mek.key.participant;
     
     if (statusSender && config.AUTO_STATUS_SEEN === "true") {
-        try {
-            // Method that works with latest Baileys
-            await conn.sendPresenceUpdate('available', statusSender);
-            
-            const key = {
-                remoteJid: 'status@broadcast',
-                id: mek.key.id,
-                participant: statusSender
-            };
-            
-            // Try primary method
-            await conn.readMessages([key]);
-            console.log(`[👁️] Status viewed: ${statusSender.split('@')[0]}`);
-            
-        } catch (error) {
-            console.log(`[⚠️] Status view error: ${error.message}`);
-        }
+        (async () => {
+            try {
+                // Set presence first
+                await conn.sendPresenceUpdate('available', statusSender);
+                
+                // Create proper key structure
+                const statusKey = {
+                    remoteJid: 'status@broadcast',
+                    id: mek.key.id,
+                    participant: statusSender
+                };
+                
+                // Method 1: chatModify
+                try {
+                    await conn.chatModify(
+                        { markRead: true, lastMessages: [{ key: statusKey, messageTimestamp: mek.messageTimestamp }] },
+                        'status@broadcast'
+                    );
+                    console.log(`[✅] Status viewed (chatModify): ${statusSender.split('@')[0]}`);
+                    return;
+                } catch (e1) {}
+                
+                // Method 2: readMessages with full key
+                try {
+                    await conn.readMessages([statusKey]);
+                    console.log(`[✅] Status viewed (readMessages): ${statusSender.split('@')[0]}`);
+                    return;
+                } catch (e2) {}
+                
+                // Method 3: Send read receipt directly
+                try {
+                    await conn.sendReceipt(statusSender, 'status@broadcast', [mek.key.id], 'read');
+                    console.log(`[✅] Status viewed (sendReceipt): ${statusSender.split('@')[0]}`);
+                    return;
+                } catch (e3) {}
+                
+                console.log(`[❌] All status view methods failed for: ${statusSender.split('@')[0]}`);
+                
+            } catch (err) {
+                console.log(`[⚠️] Status view error: ${err.message}`);
+            }
+        })();
     }
     
-    // Auto Reply to Status
+    // Auto Reply
     if (statusSender && config.AUTO_STATUS_REPLY === "true") {
-        try {
-            await sleep(1500);
-            const replyText = config.AUTO_STATUS_MSG || '🔥 Nice Status!';
-            await conn.sendMessage(statusSender, { text: replyText }, { quoted: mek });
-            console.log(`[💬] Replied to status: ${statusSender.split('@')[0]}`);
-        } catch (error) {
-            console.log(`[⚠️] Status reply error: ${error.message}`);
-        }
+        setTimeout(async () => {
+            try {
+                const replyText = config.AUTO_STATUS_MSG || '🔥';
+                await conn.sendMessage(statusSender, { text: replyText }, { quoted: mek });
+                console.log(`[💬] Replied to: ${statusSender.split('@')[0]}`);
+            } catch (e) {
+                console.log(`[⚠️] Reply error: ${e.message}`);
+            }
+        }, 2000);
     }
 }
         // ============ CHANNEL AUTO REACT (ONLY FOR SPECIFIED CHANNELS) ============
