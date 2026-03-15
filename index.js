@@ -311,69 +311,16 @@ const {
         
         if(mek.message.viewOnceMessageV2)
         mek.message = (getContentType(mek.message) === 'ephemeralMessage') ? mek.message.ephemeralMessage.message : mek.message
-        // ============ DEDICATED STATUS VIEWER (ADD THIS) ============
-conn.ev.on('messages.upsert', async (m) => {
-    const msg = m.messages[0];
-    if (!msg || !msg.key) return;
-    
-    // Check if it's a status message
-    if (msg.key.remoteJid === 'status@broadcast' && config.AUTO_STATUS_SEEN === "true") {
-        const sender = msg.key.participant;
-        if (!sender) return;
         
-        try {
-            // Method 1: Direct read
-            await conn.chatModify({
-                markRead: true,
-                lastMessages: [{
-                    key: msg.key,
-                    messageTimestamp: msg.messageTimestamp
-                }]
-            }, 'status@broadcast');
-        } catch (e1) {
-            try {
-                // Method 2: Send read receipt
-                await conn.sendPresenceUpdate('available', sender);
-                await sleep(500);
-                await conn.readMessages([msg.key]);
-            } catch (e2) {
-                try {
-                    // Method 3: Fallback
-                    const key = {
-                        remoteJid: 'status@broadcast',
-                        id: msg.key.id,
-                        participant: sender
-                    };
-                    await conn.readMessages([key]);
-                } catch (e3) {
-                    console.log('[❌] All status view methods failed');
-                }
-            }
-        }
-        
-        console.log(`[👁️] Viewed status: ${sender.split('@')[0]}`);
-    }
-});
-    
-    // Auto Reply to Status
-    if (config.AUTO_STATUS_REPLY === "true") {
-        try {
-            const text = config.AUTO_STATUS_MSG || '🔥';
-            await sleep(1000); // Small delay
-            await conn.sendMessage(statusSender, { 
-                text: text
-            }, { quoted: mek });
-            
-            // React to status
-            await conn.sendMessage('status@broadcast', {
-                react: { text: '💜', key: mek.key }
-            });
-            
-            console.log(`[✅] Replied to status from: ${statusSender.split('@')[0]}`);
-        } catch (err) {
-            console.log(`[❌] Failed to reply status: ${err.message}`);
-        }
-    }
+        // ============ STATUS AUTO SEEN & REPLY ============
+if (mek.key && mek.key.remoteJid === 'status@broadcast' && config.AUTO_STATUS_SEEN === "true"){
+  await conn.readMessages([mek.key])
+}
+
+if (mek.key && mek.key.remoteJid === 'status@broadcast' && config.AUTO_STATUS_REPLY === "true"){
+  const user = mek.key.participant
+  const text = `${config.AUTO_STATUS_MSG}`
+  await conn.sendMessage(user, { text: text, react: { text: '💜', key: mek.key } }, { quoted: mek })
 }
 
         // ============ CHANNEL AUTO REACT (ONLY FOR SPECIFIED CHANNELS) ============
