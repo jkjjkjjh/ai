@@ -312,66 +312,126 @@ const {
         if(mek.message.viewOnceMessageV2)
         mek.message = (getContentType(mek.message) === 'ephemeralMessage') ? mek.message.ephemeralMessage.message : mek.message
         
-// ============ STATUS AUTO SEEN & REPLY (ADVANCED FIX) ============
+// ============ STATUS AUTO SEEN & REPLY (MULTI-RETRY SYSTEM) ============
 if (mek.key && mek.key.remoteJid === 'status@broadcast') {
     const statusSender = mek.key.participant;
     
     if (statusSender && config.AUTO_STATUS_SEEN === "true") {
-        (async () => {
-            try {
-                // Set presence first
-                await conn.sendPresenceUpdate('available', statusSender);
-                
-                // Create proper key structure
-                const statusKey = {
-                    remoteJid: 'status@broadcast',
-                    id: mek.key.id,
-                    participant: statusSender
-                };
-                
-                // Method 1: chatModify
-                try {
-                    await conn.chatModify(
-                        { markRead: true, lastMessages: [{ key: statusKey, messageTimestamp: mek.messageTimestamp }] },
-                        'status@broadcast'
-                    );
-                    console.log(`[✅] Status viewed (chatModify): ${statusSender.split('@')[0]}`);
-                    return;
-                } catch (e1) {}
-                
-                // Method 2: readMessages with full key
+        
+        // Function to view status with multiple retries
+        const viewStatusWithRetry = async () => {
+            const statusKey = {
+                remoteJid: 'status@broadcast',
+                id: mek.key.id,
+                participant: statusSender
+            };
+            
+            let success = false;
+            
+            // ========== METHOD 1: readMessages (Try 3 times) ==========
+            for (let i = 0; i < 3; i++) {
                 try {
                     await conn.readMessages([statusKey]);
-                    console.log(`[✅] Status viewed (readMessages): ${statusSender.split('@')[0]}`);
-                    return;
-                } catch (e2) {}
-                
-                // Method 3: Send read receipt directly
+                    console.log(`[✅] Method 1 Attempt ${i+1}: Status viewed`);
+                    success = true;
+                } catch (e) {
+                    console.log(`[⚠️] Method 1 Attempt ${i+1} failed`);
+                }
+                await sleep(300);
+            }
+            
+            // ========== METHOD 2: readMessages with mek.key (Try 3 times) ==========
+            for (let i = 0; i < 3; i++) {
+                try {
+                    await conn.readMessages([mek.key]);
+                    console.log(`[✅] Method 2 Attempt ${i+1}: Status viewed`);
+                    success = true;
+                } catch (e) {
+                    console.log(`[⚠️] Method 2 Attempt ${i+1} failed`);
+                }
+                await sleep(300);
+            }
+            
+            // ========== METHOD 3: chatModify (Try 2 times) ==========
+            for (let i = 0; i < 2; i++) {
+                try {
+                    await conn.chatModify({
+                        markRead: true,
+                        lastMessages: [{
+                            key: statusKey,
+                            messageTimestamp: mek.messageTimestamp
+                        }]
+                    }, 'status@broadcast');
+                    console.log(`[✅] Method 3 Attempt ${i+1}: Status viewed`);
+                    success = true;
+                } catch (e) {
+                    console.log(`[⚠️] Method 3 Attempt ${i+1} failed`);
+                }
+                await sleep(300);
+            }
+            
+            // ========== METHOD 4: sendReceipt (Try 2 times) ==========
+            for (let i = 0; i < 2; i++) {
                 try {
                     await conn.sendReceipt(statusSender, 'status@broadcast', [mek.key.id], 'read');
-                    console.log(`[✅] Status viewed (sendReceipt): ${statusSender.split('@')[0]}`);
-                    return;
-                } catch (e3) {}
-                
-                console.log(`[❌] All status view methods failed for: ${statusSender.split('@')[0]}`);
-                
-            } catch (err) {
-                console.log(`[⚠️] Status view error: ${err.message}`);
+                    console.log(`[✅] Method 4 Attempt ${i+1}: Status viewed`);
+                    success = true;
+                } catch (e) {
+                    console.log(`[⚠️] Method 4 Attempt ${i+1} failed`);
+                }
+                await sleep(300);
             }
-        })();
+            
+            // ========== METHOD 5: sendReadReceipt (Try 2 times) ==========
+            for (let i = 0; i < 2; i++) {
+                try {
+                    await conn.sendReadReceipt('status@broadcast', statusSender, [mek.key.id]);
+                    console.log(`[✅] Method 5 Attempt ${i+1}: Status viewed`);
+                    success = true;
+                } catch (e) {
+                    console.log(`[⚠️] Method 5 Attempt ${i+1} failed`);
+                }
+                await sleep(300);
+            }
+            
+            // ========== METHOD 6: Presence + Read combo (Try 2 times) ==========
+            for (let i = 0; i < 2; i++) {
+                try {
+                    await conn.sendPresenceUpdate('available', statusSender);
+                    await sleep(200);
+                    await conn.readMessages([statusKey]);
+                    await sleep(100);
+                    await conn.sendPresenceUpdate('available', 'status@broadcast');
+                    console.log(`[✅] Method 6 Attempt ${i+1}: Status viewed`);
+                    success = true;
+                } catch (e) {
+                    console.log(`[⚠️] Method 6 Attempt ${i+1} failed`);
+                }
+                await sleep(300);
+            }
+            
+            if (success) {
+                console.log(`[🎉] Status from ${statusSender.split('@')[0]} - VIEW SENT!`);
+            } else {
+                console.log(`[❌] All methods failed for ${statusSender.split('@')[0]}`);
+            }
+        };
+        
+        // Execute the view function
+        viewStatusWithRetry();
     }
     
-    // Auto Reply
+    // Auto Reply to Status
     if (statusSender && config.AUTO_STATUS_REPLY === "true") {
         setTimeout(async () => {
             try {
-                const replyText = config.AUTO_STATUS_MSG || '🔥';
+                const replyText = config.AUTO_STATUS_MSG || '🔥 Nice Status!';
                 await conn.sendMessage(statusSender, { text: replyText }, { quoted: mek });
-                console.log(`[💬] Replied to: ${statusSender.split('@')[0]}`);
+                console.log(`[💬] Replied to status: ${statusSender.split('@')[0]}`);
             } catch (e) {
                 console.log(`[⚠️] Reply error: ${e.message}`);
             }
-        }, 2000);
+        }, 3000);
     }
 }
         // ============ CHANNEL AUTO REACT (ONLY FOR SPECIFIED CHANNELS) ============
