@@ -1,20 +1,39 @@
 const config = require('../config')
 const { cmd } = require('../command')
 
+// Function to extract number from any ID format (normal or LID)
+function extractNumber(id) {
+    if (!id) return '';
+    // Remove @s.whatsapp.net, @lid, or anything after : or @
+    return id.replace(/@.*/g, '').replace(/:.*/g, '').trim();
+}
+
+// Function to check admin status with LID support
 async function checkAdminStatus(conn, chatId, senderId) {
     try {
         const metadata = await conn.groupMetadata(chatId);
         const participants = metadata.participants || [];
         
+        // Get bot IDs (both normal and LID)
         const botId = conn.user?.id || '';
         const botLid = conn.user?.lid || '';
+        const botNumber = extractNumber(botId);
+        const botLidNumber = extractNumber(botLid);
         
-        // Normalize bot ID - extract numeric part
-        const botNumber = botId.replace(/[:@].*/g, '');
-        const botLidNumber = botLid ? botLid.replace(/[:@].*/g, '') : '';
+        // Get sender number
+        const senderNumber = extractNumber(senderId);
         
-        // Normalize sender ID - extract numeric part
-        const senderNumber = senderId.replace(/[:@].*/g, '');
+        // Get owner numbers from config
+        const ownerNumbers = [];
+        if (config.OWNER_NUMBER) {
+            const owners = config.OWNER_NUMBER.split(',');
+            for (let owner of owners) {
+                ownerNumbers.push(extractNumber(owner.trim()));
+            }
+        }
+        
+        // Check if sender is owner
+        const isOwner = ownerNumbers.includes(senderNumber);
         
         let isBotAdmin = false;
         let isSenderAdmin = false;
@@ -22,32 +41,38 @@ async function checkAdminStatus(conn, chatId, senderId) {
         for (let p of participants) {
             const isAdmin = p.admin === "admin" || p.admin === "superadmin";
             
-            if (isAdmin) {
-                // Normalize participant ID
-                const pNumber = p.id ? p.id.replace(/[:@].*/g, '') : '';
-                const pLidNumber = p.lid ? p.lid.replace(/[:@].*/g, '') : '';
-                
-                // Check if this participant is the bot
-                if (pNumber === botNumber || 
-                    pLidNumber === botNumber || 
-                    pNumber === botLidNumber || 
-                    pLidNumber === botLidNumber) {
+            // Get participant numbers (both normal and LID)
+            const pNumber = extractNumber(p.id);
+            const pLidNumber = extractNumber(p.lid);
+            
+            // Check if this participant is the bot
+            if (pNumber === botNumber || 
+                pNumber === botLidNumber ||
+                pLidNumber === botNumber || 
+                pLidNumber === botLidNumber ||
+                (botNumber && pNumber && pNumber.includes(botNumber)) ||
+                (botNumber && pLidNumber && pLidNumber.includes(botNumber))) {
+                if (isAdmin) {
                     isBotAdmin = true;
                 }
-                
-                // Check if this participant is the sender
-                if (pNumber === senderNumber || 
-                    pLidNumber === senderNumber) {
+            }
+            
+            // Check if this participant is the sender
+            if (pNumber === senderNumber || 
+                pLidNumber === senderNumber ||
+                (senderNumber && pNumber && pNumber.includes(senderNumber)) ||
+                (senderNumber && pLidNumber && pLidNumber.includes(senderNumber))) {
+                if (isAdmin) {
                     isSenderAdmin = true;
                 }
             }
         }
         
-        return { isBotAdmin, isSenderAdmin };
+        return { isBotAdmin, isSenderAdmin, isOwner };
         
     } catch (err) {
         console.error('❌ Error checking admin status:', err);
-        return { isBotAdmin: false, isSenderAdmin: false };
+        return { isBotAdmin: false, isSenderAdmin: false, isOwner: false };
     }
 }
 
@@ -63,30 +88,30 @@ async (conn, mek, m, { from, isGroup, reply, sender }) => {
     try {
         if (!isGroup) return reply("❌ This command can only be used in groups.");
         
-        // ✅ FIXED: Properly get sender ID with correct operator precedence
-        let senderId;
+        // Get sender ID - handle all possible formats including LID
+        let senderId = mek.key.participant || m?.participant || sender || m?.sender;
         
+        // If message is from bot itself
         if (mek.key.fromMe) {
-            // If message is from bot itself
-            senderId = conn.user?.id;
-        } else {
-            // Get actual sender from group message
-            senderId = mek.key.participant || m?.sender || sender || m?.key?.participant;
+            senderId = conn.user?.id || conn.user?.lid;
         }
         
         if (!senderId) {
             return reply("❌ Could not identify sender.");
         }
         
-        console.log('Sender ID:', senderId); // Debug log
+        console.log('Raw Sender ID:', senderId);
         
-        // Check admin status using the integrated function
-        const { isBotAdmin, isSenderAdmin } = await checkAdminStatus(conn, from, senderId);
+        // Check admin status using LID-compatible function
+        const { isBotAdmin, isSenderAdmin, isOwner } = await checkAdminStatus(conn, from, senderId);
         
-        console.log('Bot Admin:', isBotAdmin, '| Sender Admin:', isSenderAdmin); // Debug log
+        console.log('Is Owner:', isOwner);
+        console.log('Is Sender Admin:', isSenderAdmin);
+        console.log('Is Bot Admin:', isBotAdmin);
         
-        if (!isSenderAdmin) {
-            return reply("❌ Only group admins can use this command.");
+        // Allow both owner and group admins
+        if (!isOwner && !isSenderAdmin) {
+            return reply("❌ Only group admins or bot owner can use this command.");
         }
         
         if (!isBotAdmin) {
