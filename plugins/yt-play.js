@@ -1,16 +1,78 @@
 const { cmd } = require('../command')
 const axios = require('axios')
 const yts = require('yt-search')
-const fs = require('fs')
-const path = require('path')
-const ffmpeg = require('fluent-ffmpeg')
-const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path
 
-ffmpeg.setFfmpegPath(ffmpegPath)
+// ═══════════════════════════════════════════════════════════
+// 🎬 VIDEO COMMAND (UNCHANGED)
+// ═══════════════════════════════════════════════════════════
+cmd({
+    pattern: "ytv2",
+    alias: ["ytmp42", "video2"],
+    desc: "Download YouTube video (MP4)",
+    category: "download",
+    react: "📹",
+    filename: __filename
+}, async (conn, mek, m, { from, q, reply }) => {
+    try {
+        if (!q) return await reply("🎥 Please provide a YouTube video name or URL!\n\nExample: `.ytv alone marshmello`");
 
+        let url = q;
+        let videoInfo = null;
+
+        if (q.startsWith('http://') || q.startsWith('https://')) {
+            if (!q.includes("youtube.com") && !q.includes("youtu.be")) {
+                return await reply("❌ Please provide a valid YouTube URL!");
+            }
+            const videoId = getVideoId(q);
+            if (!videoId) return await reply("❌ Invalid YouTube URL!");
+            const searchFromUrl = await yts({ videoId });
+            videoInfo = searchFromUrl;
+        } else {
+            const search = await yts(q);
+            videoInfo = search.videos[0];
+            if (!videoInfo) return await reply("❌ No video results found!");
+            url = videoInfo.url;
+        }
+
+        function getVideoId(url) {
+            const match = url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/);
+            return match ? match[1] : null;
+        }
+
+        await conn.sendMessage(from, {
+            image: { url: videoInfo.thumbnail },
+            caption: `*🎬 VIDEO DOWNLOADER*\n\n🎞️ *Title:* ${videoInfo.title}\n📺 *Channel:* ${videoInfo.author.name}\n🕒 *Duration:* ${videoInfo.timestamp}\n\n*Status:* Downloading Video...\n\n*© ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴇʀғᴀɴ-ᴍᴅ*`
+        }, { quoted: mek });
+
+        const apiUrl = `https://jawad-tech.vercel.app/download/ytdl?url=${encodeURIComponent(url)}`;
+        const { data } = await axios.get(apiUrl);
+
+        if (!data?.status || !data?.result?.mp4) {
+            return await reply("❌ Failed to fetch download link! Try again later.");
+        }
+
+        const vid = data.result;
+
+        await conn.sendMessage(from, {
+            video: { url: vid.mp4 },
+            caption: `🎬 *${vid.title}*\n\n*© ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴇʀғᴀɴ-ᴍᴅ*`
+        }, { quoted: mek });
+
+        await conn.sendMessage(from, { react: { text: '✅', key: m.key } });
+
+    } catch (e) {
+        console.error("❌ Error in .ytv command:", e);
+        await reply("⚠️ Something went wrong! Try again later.");
+        await conn.sendMessage(from, { react: { text: '❌', key: m.key } });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════
+// 🎵 SONG COMMAND (FIXED - 2 APIs ONLY)
+// ═══════════════════════════════════════════════════════════
 cmd({
     pattern: "song",
-    alias: ["play", "music", "audio"],
+    alias: ["play", "music", "audio", "aa"],
     desc: "Download YouTube song with multiple API fallback",
     category: "download",
     react: "🎧",
@@ -18,13 +80,13 @@ cmd({
 }, async (conn, mek, m, { from, reply, text }) => {
     try {
         if (!text) {
-            return reply("❌ Song name likho\nExample:\n.song la la la")
+            return reply("❌ Please provide song name\nExample: .song Shape of You")
         }
 
         // 🔍 YouTube search
         const search = await yts(text)
         if (!search.videos || !search.videos.length) {
-            return reply("❌ Song nahi mila")
+            return reply("❌ No song found!")
         }
 
         const vid = search.videos[0]
@@ -48,63 +110,24 @@ cmd({
 
         let audioBuffer = null
         let downloadSuccess = false
-        let usedAPI = ""
 
         // ═══════════════════════════════════════════════════════════
-        // 🔷 API 1:  API (MP4 → FFmpeg → MP3)
+        // 🔷 API 1: EliteProTech API (Primary - Direct MP3)
         // ═══════════════════════════════════════════════════════════
         if (!downloadSuccess) {
             try {
-                console.log("🔄 Trying API 1: Arslan API...")
-                const api1 = `https://arslan-apis.vercel.app/download/ytmp4?url=${encodeURIComponent(vid.url)}`
-                const res1 = await axios.get(api1, { timeout: 60000 })
+                const api1 = `https://eliteprotech-apis.zone.id/ytmp3?url=${encodeURIComponent(vid.url)}`
+                const res1 = await axios.get(api1, { timeout: 30000 })
 
-                if (res1.data?.status && res1.data?.result?.download?.url) {
-                    const videoUrl = res1.data.result.download.url
-
-                    // 📂 Temp files
-                    const tempDir = path.join(__dirname, '../temp')
-                    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true })
-
-                    const videoPath = path.join(tempDir, `song_${Date.now()}.mp4`)
-                    const audioPath = path.join(tempDir, `song_${Date.now()}.mp3`)
-
-                    // ⬇ Download video
-                    const stream = await axios({
-                        url: videoUrl,
-                        method: "GET",
-                        responseType: "stream",
-                        timeout: 120000
+                if (res1.data?.status && res1.data?.result?.download) {
+                    const audioUrl = res1.data.result.download
+                    const audioRes = await axios.get(audioUrl, { 
+                        responseType: 'arraybuffer', 
+                        timeout: 60000 
                     })
-
-                    await new Promise((resolve, reject) => {
-                        const w = fs.createWriteStream(videoPath)
-                        stream.data.pipe(w)
-                        w.on('finish', resolve)
-                        w.on('error', reject)
-                    })
-
-                    // 🎧 FFmpeg → MP3
-                    await new Promise((resolve, reject) => {
-                        ffmpeg(videoPath)
-                            .noVideo()
-                            .audioCodec('libmp3lame')
-                            .audioBitrate('128k')
-                            .format('mp3')
-                            .on('end', resolve)
-                            .on('error', reject)
-                            .save(audioPath)
-                    })
-
-                    audioBuffer = fs.readFileSync(audioPath)
+                    audioBuffer = Buffer.from(audioRes.data)
                     downloadSuccess = true
-                    usedAPI = "API 1 (Arslan)"
-
-                    // 🧹 Cleanup
-                    if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath)
-                    if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath)
-                    
-                    console.log("✅ API 1 Success!")
+                    console.log("✅ API 1 (EliteProTech) Success!")
                 }
             } catch (e) {
                 console.log("❌ API 1 Failed:", e.message)
@@ -112,13 +135,12 @@ cmd({
         }
 
         // ═══════════════════════════════════════════════════════════
-        // 🔷 API 2: GiftedTech API (Direct MP3)
+        // 🔷 API 2: GiftedTech API (Backup - Direct MP3)
         // ═══════════════════════════════════════════════════════════
         if (!downloadSuccess) {
             try {
-                console.log("🔄 Trying API 2: GiftedTech API...")
                 const api2 = `https://api.giftedtech.co.ke/api/download/ytmp3v2?apikey=gifted&url=${encodeURIComponent(vid.url)}&quality=128`
-                const res2 = await axios.get(api2, { timeout: 60000 })
+                const res2 = await axios.get(api2, { timeout: 30000 })
 
                 const result = res2.data.result || res2.data.results || res2.data
                 const audioUrl = result.download_url || result.downloadUrl || result.url || result.audio || result.link
@@ -126,45 +148,14 @@ cmd({
                 if (audioUrl) {
                     const audioRes = await axios.get(audioUrl, { 
                         responseType: 'arraybuffer', 
-                        timeout: 120000 
+                        timeout: 60000 
                     })
                     audioBuffer = Buffer.from(audioRes.data)
                     downloadSuccess = true
-                    usedAPI = "API 2 (GiftedTech)"
-                    console.log("✅ API 2 Success!")
+                    console.log("✅ API 2 (GiftedTech) Success!")
                 }
             } catch (e) {
                 console.log("❌ API 2 Failed:", e.message)
-            }
-        }
-
-        // ═══════════════════════════════════════════════════════════
-        // 🔷 API 3: Your Third API (Add here)
-        // ═══════════════════════════════════════════════════════════
-        if (!downloadSuccess) {
-            try {
-                console.log("🔄 Trying API 3: Third API...")
-                
-                // 🔸 Replace this URL with your third API
-                const api3 = `YOUR_THIRD_API_URL_HERE?url=${encodeURIComponent(vid.url)}`
-                const res3 = await axios.get(api3, { timeout: 60000 })
-
-                // 🔸 Adjust response handling based on your API response structure
-                const result = res3.data.result || res3.data
-                const audioUrl = result.download_url || result.url || result.audio || result.link
-
-                if (audioUrl) {
-                    const audioRes = await axios.get(audioUrl, { 
-                        responseType: 'arraybuffer', 
-                        timeout: 120000 
-                    })
-                    audioBuffer = Buffer.from(audioRes.data)
-                    downloadSuccess = true
-                    usedAPI = "API 3"
-                    console.log("✅ API 3 Success!")
-                }
-            } catch (e) {
-                console.log("❌ API 3 Failed:", e.message)
             }
         }
 
@@ -179,13 +170,16 @@ cmd({
                 ptt: false
             }, { quoted: mek })
 
-            console.log(`✅ Song sent successfully using ${usedAPI}`)
+            await conn.sendMessage(from, { react: { text: '✅', key: m.key } })
+            console.log(`✅ Song sent successfully!`)
         } else {
-            return reply("❌ All APIs failed! Please try again later.\n\nplease try again later")
+            await conn.sendMessage(from, { react: { text: '❌', key: m.key } })
+            return reply("❌ API Error! Please try again later.")
         }
 
     } catch (err) {
         console.error("❌ SONG ERROR:", err)
-        reply("❌ Song download / convert error, thori dair baad try karo")
+        await conn.sendMessage(from, { react: { text: '❌', key: m.key } })
+        reply("❌ API Error! Please try again later.")
     }
 })
